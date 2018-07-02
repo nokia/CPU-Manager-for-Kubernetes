@@ -34,7 +34,7 @@ Usage:
   cmk describe [--conf-dir=<dir>]
   cmk reconcile [--conf-dir=<dir>] [--publish] [--interval=<seconds>]
   cmk isolate [--conf-dir=<dir>] [--socket-id=<num>] --pool=<pool> <command>
-              [-- <args> ...][--no-affinity]
+              [-- <args> ...][--no-affinity][--num-cpus=<num>]
   cmk install [--install-dir=<dir>]
   cmk node-report [--conf-dir=<dir>] [--publish] [--interval=<seconds>]
   cmk uninstall [--install-dir=<dir>] [--conf-dir=<dir>] [--namespace=<name>]
@@ -57,6 +57,7 @@ Options:
                         If set to 0, will only run once. [default: 0]
   --num-dp-cores=<num>  Number of data plane cores [default: 4].
   --num-cp-cores=<num>  Number of control plane cores [default: 1].
+  --num-cpus=<num>      Number of cpus to allocate [default: 1].
   --pool=<pool>         Pool name: either infra, controlplane or dataplane.
   --cp-mode=<mode>      Control plane core allocation mode. Possible modes:
                         packed and spread [default: packed].

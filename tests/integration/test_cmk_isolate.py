@@ -38,6 +38,19 @@ CMK_PROC_FS=/proc
 """
 
 
+def test_cmk_isolate_many():
+    args = ["isolate",
+            "--conf-dir={}".format(helpers.conf_dir("empty_8_cpu_ht")),
+            "--pool=dataplane",
+            "--num-cpus=3",
+            "env | grep CMK"]
+
+    assert helpers.execute(integration.cmk(), args, proc_env) == b"""\
+CMK_CPUS_ASSIGNED=4,12,5,13,6,14
+CMK_PROC_FS=/proc
+"""
+
+
 def test_cmk_isolate_shared():
     args = ["isolate",
             "--conf-dir={}".format(helpers.conf_dir("minimal")),

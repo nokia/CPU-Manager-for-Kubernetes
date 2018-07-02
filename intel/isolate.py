@@ -23,7 +23,8 @@ import subprocess
 ENV_CPUS_ASSIGNED = "CMK_CPUS_ASSIGNED"
 
 
-def isolate(conf_dir, pool_name, no_affinity, command, args, socket_id=None):
+def isolate(conf_dir, pool_name, no_affinity, num_cpus, command, args,
+            socket_id=None):
     c = config.Config(conf_dir)
     with c.lock():
         pools = c.pools()
@@ -37,29 +38,40 @@ def isolate(conf_dir, pool_name, no_affinity, command, args, socket_id=None):
         else:
             selected_socket = socket_id
 
-        clist = None
+        num_cpus_found = 0
+        clist = []
         if pool.exclusive():
             for cl in pool.cpu_lists(selected_socket).values():
                 if len(cl.tasks()) == 0:
-                    clist = cl
-                    break
+                    clist.append(cl)
+                    num_cpus_found += 1
+                    if (num_cpus_found == num_cpus):
+                        break
+            if (num_cpus_found != num_cpus):
+                raise SystemError("Not enough free cpu lists in pool {}"
+                                  .format(pool_name))
         else:
             # NOTE(CD): This allocation algorithm is probably an
             # oversimplification, however for known use cases the non-exclusive
             # pools should never have more than one cpu list anyhow.
             # If that ceases to hold in the future, we could explore population
             # or load-based spreading. Keeping it simple for now.
-            clist = random.choice(list(pool.cpu_lists().values()))
+            clist.append(random.choice(list(pool.cpu_lists().values())))
 
         if not clist:
-            raise SystemError("No free cpu lists in pool {}".format(pool_name))
+            raise SystemError("No free cpu lists in pool {}"
+                              .format(pool_name))
 
-        clist.add_task(proc.getpid())
+        [cpu_list.add_task(proc.getpid()) for cpu_list in clist]
 
     # NOTE: we spawn the child process after exiting the config lock context.
     try:
         # Advertise assigned CPU IDs in the environment.
-        os.environ[ENV_CPUS_ASSIGNED] = clist.cpus()
+        cpu_assign = ""
+        for cpu_list in clist:
+            cpu_assign += cpu_list.cpus() + ","
+
+        os.environ[ENV_CPUS_ASSIGNED] = cpu_assign[:-1]
 
         # We use psutil here (instead of the cmk provided
         # process abstraction) as we need to change the affinity of the current
@@ -74,7 +86,7 @@ def isolate(conf_dir, pool_name, no_affinity, command, args, socket_id=None):
 command because the --no-affinity flag was supplied""")
 
         else:
-            cpu_list = proc.unfold_cpu_list(clist.cpus())
+            cpu_list = proc.unfold_cpu_list(cpu_assign[:-1])
             logging.debug("Setting CPU affinity to %s", cpu_list)
             p.cpu_affinity(cpu_list)
 
@@ -95,4 +107,4 @@ command because the --no-affinity flag was supplied""")
 
     finally:
         with c.lock():
-            clist.remove_task(proc.getpid())
+            [cpu_list.remove_task(proc.getpid()) for cpu_list in clist]
