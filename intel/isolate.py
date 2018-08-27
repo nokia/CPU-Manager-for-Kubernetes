@@ -19,14 +19,42 @@ import random
 import psutil
 import signal
 import subprocess
+import json
 
 ENV_CPUS_ASSIGNED = "CMK_CPUS_ASSIGNED"
 ENV_CPUS_INFRA = "CMK_CPUS_INFRA"
 ENV_NUM_CORES = "CMK_NUM_CORES"
+ENV_DP_CPUS = "CPUS"
+
+
+def store_dp_cpu_map(dp_cpus, cpu_ids):
+    with open("/etc/cmk/cpudevmap.json") as cpudevmap_file:
+        cpumap = json.load(cpudevmap_file)
+
+    cmk_cpus_list = cpu_ids.split(",")
+    for cpu in dp_cpus.split(","):
+        cpumap['cpudevidmap'][cpu] = cmk_cpus_list.pop()
+
+    with open(os.path.join("/etc/cmk", 'cpudevmap.json'), 'w') as outfile:
+        json.dump(cpumap, outfile, indent=4, separators=(',', ': '))
+
+
+def release_dp_cpu_map(dp_cpus):
+    with open("/etc/cmk/cpudevmap.json") as cpudevmap_file:
+        cpumap = json.load(cpudevmap_file)
+
+    for cpu in dp_cpus.split(","):
+        cpumap['cpudevidmap'][cpu] = ""
+
+    with open(os.path.join("/etc/cmk", 'cpudevmap.json'), 'w') as outfile:
+        json.dump(cpumap, outfile, indent=4, separators=(',', ': '))
 
 
 def isolate(conf_dir, pool_name, no_affinity, command, args, socket_id=None):
     c = config.Config(conf_dir)
+    # Check if CPU device plugin is enabled
+    dp_cpus = os.getenv(ENV_DP_CPUS)
+
     with c.lock():
         pools = c.pools()
         if pool_name not in pools:
@@ -81,6 +109,9 @@ def isolate(conf_dir, pool_name, no_affinity, command, args, socket_id=None):
         cpu_ids = ','.join([cl.cpus() for cl in clists])
         os.environ[ENV_CPUS_ASSIGNED] = cpu_ids
 
+        if dp_cpus:
+            store_dp_cpu_map(dp_cpus, cpu_ids)
+
         # Advertise infra pool CPU IDs
         infra_pool = pools.get("infra")
         if infra_pool is not None:
@@ -125,3 +156,5 @@ command because the --no-affinity flag was supplied""")
         with c.lock():
             for cl in clists:
                 cl.remove_task(proc.getpid())
+            if dp_cpus:
+                release_dp_cpu_map(dp_cpus)
