@@ -41,11 +41,14 @@ class WebhookServerConfig(object):
             sys.exit(1)
 
         try:
+            global CMK_ER_NAME
             self.address = config["server"]["binding-address"]
             self.port = config["server"]["port"]
             self.cert = config["server"]["cert"]
             self.key = config["server"]["key"]
             self.mutations = config["server"]["mutations"]
+            if "resource-name" in config["server"]:
+                CMK_ER_NAME = config["server"]["resource-name"]
         except KeyError as err:
             logging.error("Error loading configuration: {}".format(str(err)))
             sys.exit(1)

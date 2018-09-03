@@ -11,6 +11,7 @@ data:
       cert: "/etc/ssl/cert.pem"
       key: "/etc/ssl/key.pem"
       mutations: "/etc/webhook/mutations.yaml"
+      resource-name: "nokia.com/cpupool1"
   mutations.yaml: |
     mutations:
       perPod:
