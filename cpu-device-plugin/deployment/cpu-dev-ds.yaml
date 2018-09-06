@@ -21,34 +21,16 @@ spec:
         - name: CMK_PROC_FS
           value: "/host/proc"
         volumeMounts:
-        - mountPath: /var/lib/kubelet/device-plugins/ 
-          name: devicesock 
-          readOnly: false
-        - mountPath: /opt/bin
-          name: cmk-bin
-          readOnly: true
-        - mountPath: /etc/cmk
-          name: cmk-conf
-          readOnly: false
-        - mountPath: /host/proc
-          name: host-proc
-          readOnly: false
-
+         - mountPath: /etc/cpudp
+           name: cpu-dp-config
+         - mountPath: /var/lib/kubelet/device-plugins/ 
+           name: devicesock 
+           readOnly: false
       volumes:
       - name: devicesock 
         hostPath:
          # directory location on host
          path: /var/lib/kubelet/device-plugins/
-      - name: cmk-bin
-        hostPath:
-         # directory location on host
-         path: /opt/bin
-      - name: cmk-conf
-        hostPath:
-         # directory location on host
-         path: /etc/cmk
-      - name: host-proc
-        hostPath:
-         # directory location on host
-         path: /proc
-
+      - name: cpu-dp-config
+        configMap:
+          name: cpu-dp-configmap

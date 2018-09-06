@@ -1,215 +1,64 @@
 package main
 
 import (
-	"encoding/json"
-	"flag"
-	"fmt"
-	"io/ioutil"
-	"net"
-	"os"
-	"os/exec"
-	"os/signal"
-	"path"
-	"path/filepath"
-	"reflect"
-	"strconv"
-	"syscall"
-	"time"
-
+	"github.com/go-yaml/yaml"
 	"github.com/golang/glog"
+	"github.com/kubevirt/device-plugin-manager/pkg/dpm"
 	"golang.org/x/net/context"
-	grpc "google.golang.org/grpc"
-
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	"io/ioutil"
 	pluginapi "k8s.io/kubernetes/pkg/kubelet/apis/deviceplugin/v1beta1"
+	"strconv"
+	"strings"
+	"time"
 )
 
-const (
-	pluginMountPath      = "/var/lib/kubelet/device-plugins"
-	kubeletEndpoint      = "kubelet.sock"
-	pluginEndpointPrefix = "cpuDevice"
-)
+type Pool struct {
+	Cpus string `yaml:"cpus"`
+}
 
-type CpuDevIdMapType struct {
-	CpuDevidMap map[string]string `json:"cpudevidmap"`
+type PoolConfig struct {
+	Pools map[string]Pool `yaml:"pools"`
 }
 
 type cpuDeviceManager struct {
-	k8ClientSet *kubernetes.Clientset
-	socketFile  string
-	grpcServer  *grpc.Server
-	devices     CpuDevIdMapType
-}
-
-func NewCpuDeviceManager(dpCores int) *cpuDeviceManager {
-
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		glog.Errorf("Error. Could not get InClusterConfig to create K8s Client. %v", err)
-		return nil
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		glog.Errorf("Error. Could not create K8s Client using supplied config. %v", err)
-		return nil
-	}
-	dpCoresArg := "--num-dp-cores=" + strconv.Itoa(dpCores)
-	cmd := exec.Command("/opt/bin/cmk", "init", "--conf-dir=/etc/cmk", dpCoresArg, "--num-cp-cores=1")
-
-	stdoutStderr, err := cmd.CombinedOutput()
-	if err != nil {
-
-		glog.Errorf("CMK init finished with error: %v\n%s", err, stdoutStderr)
-		return nil
-	}
-	glog.Infof("CMK init finished:\n%s", stdoutStderr)
-
-	var devs CpuDevIdMapType
-	devs.CpuDevidMap = make(map[string]string)
-
-	for i := 0; i < dpCores; i++ {
-		devs.CpuDevidMap[strconv.Itoa(i)] = ""
-	}
-	jsonOut, _ := json.MarshalIndent(devs, "", "    ")
-	ioutil.WriteFile("/etc/cmk/cpudevmap.json", jsonOut, os.FileMode(0666))
-
-	return &cpuDeviceManager{
-		k8ClientSet: clientset,
-		socketFile:  fmt.Sprintf("%s.sock", pluginEndpointPrefix),
-		devices:     devs,
-	}
-}
-
-func (cdm *cpuDeviceManager) Start() error {
-	glog.Infof("Discovering CPUs")
-
-	pluginEndpoint := filepath.Join(pluginapi.DevicePluginPath, cdm.socketFile)
-	glog.Infof("Starting CPU Device Plugin server at: %s\n", pluginEndpoint)
-	lis, err := net.Listen("unix", pluginEndpoint)
-	if err != nil {
-		glog.Errorf("Error. Starting CPU Device Plugin server failed: %v", err)
-	}
-	cdm.grpcServer = grpc.NewServer()
-
-	// Register all services
-	pluginapi.RegisterDevicePluginServer(cdm.grpcServer, cdm)
-
-	go cdm.grpcServer.Serve(lis)
-
-	// Wait for server to start by launching a blocking connection
-	conn, err := grpc.Dial(pluginEndpoint, grpc.WithInsecure(), grpc.WithBlock(),
-		grpc.WithTimeout(5*time.Second),
-		grpc.WithDialer(func(addr string, timeout time.Duration) (net.Conn, error) {
-			return net.DialTimeout("unix", addr, timeout)
-		}),
-	)
-
-	if err != nil {
-		glog.Errorf("Error. Could not establish connection with gRPC server: %v", err)
-		return err
-	}
-	glog.Infoln("CPU Device Plugin server started serving")
-	conn.Close()
-	return nil
-}
-
-func (cdm *cpuDeviceManager) Stop() error {
-	glog.Infof("CPU Device Plugin gRPC server..")
-	if cdm.grpcServer == nil {
-		return nil
-	}
-
-	cdm.grpcServer.Stop()
-	cdm.grpcServer = nil
-
-	return cdm.cleanup()
-}
-
-// Removes existing socket if exists
-// [adpoted from https://github.com/redhat-nfvpe/k8s-dummy-device-plugin/blob/master/dummy.go ]
-func (cdm *cpuDeviceManager) cleanup() error {
-	pluginEndpoint := filepath.Join(pluginapi.DevicePluginPath, cdm.socketFile)
-	if err := os.Remove(pluginEndpoint); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	return nil
-}
-
-func Register(kubeletEndpoint, pluginEndpoint, resourceName string) error {
-	conn, err := grpc.Dial(kubeletEndpoint, grpc.WithInsecure(),
-		grpc.WithDialer(func(addr string, timeout time.Duration) (net.Conn, error) {
-			return net.DialTimeout("unix", addr, timeout)
-		}))
-	if err != nil {
-		glog.Errorf("CPU Device Plugin cannot connect to Kubelet service: %v", err)
-		return err
-	}
-	defer conn.Close()
-	client := pluginapi.NewRegistrationClient(conn)
-
-	request := &pluginapi.RegisterRequest{
-		Version:      pluginapi.Version,
-		Endpoint:     pluginEndpoint,
-		ResourceName: resourceName,
-	}
-
-	if _, err = client.Register(context.Background(), request); err != nil {
-		glog.Errorf("CPU Device Plugin cannot register to Kubelet service: %v", err)
-		return err
-	}
-	return nil
-}
-
-func (cdm *cpuDeviceManager) ListAndWatch(emtpy *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
-
-	var devMap CpuDevIdMapType
-	updateNeeded := true
-	for {
-		if updateNeeded {
-			resp := new(pluginapi.ListAndWatchResponse)
-			for devId, cpuId := range cdm.devices.CpuDevidMap {
-				if cpuId == "" {
-					resp.Devices = append(resp.Devices, &pluginapi.Device{devId, pluginapi.Healthy})
-				}
-			}
-			glog.Infof("ListAndWatch: send devices %v\n", resp)
-			if err := stream.Send(resp); err != nil {
-				glog.Errorf("Error. Cannot update device states: %v\n", err)
-				cdm.grpcServer.Stop()
-				return err
-			}
-			updateNeeded = false
-		}
-		time.Sleep(5 * time.Second)
-		file, e := ioutil.ReadFile("/etc/cmk/cpudevmap.json")
-		if e != nil {
-			glog.Errorf("Cannot read cpudevmap.json")
-		}
-		json.Unmarshal([]byte(file), &devMap)
-		if !reflect.DeepEqual(cdm.devices, devMap) {
-			for key, value := range devMap.CpuDevidMap {
-				cdm.devices.CpuDevidMap[key] = value
-			}
-			updateNeeded = true
-		}
-	}
-
-	return nil
+	pool Pool
 }
 
 func (cdm *cpuDeviceManager) PreStartContainer(ctx context.Context, psRqt *pluginapi.PreStartContainerRequest) (*pluginapi.PreStartContainerResponse, error) {
 	return &pluginapi.PreStartContainerResponse{}, nil
 }
 
-func (cdm *cpuDeviceManager) GetDevicePluginOptions(ctx context.Context, empty *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
-	return &pluginapi.DevicePluginOptions{
-		PreStartRequired: false,
-	}, nil
+func (cdm *cpuDeviceManager) Start() error {
+	return nil
 }
 
-//Allocate passes the CPU numbers as an env variable to the requesting container
+func (cdm *cpuDeviceManager) Stop() error {
+	return nil
+}
+
+func (cdm *cpuDeviceManager) ListAndWatch(e *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
+	var updateNeeded = true
+	for {
+		if updateNeeded {
+			resp := new(pluginapi.ListAndWatchResponse)
+			for _, cpuId := range strings.Split(cdm.pool.Cpus, ",") {
+				resp.Devices = append(resp.Devices, &pluginapi.Device{cpuId, pluginapi.Healthy})
+			}
+			glog.Infof("ListAndWatch: send devices %v\n", resp)
+			if err := stream.Send(resp); err != nil {
+				glog.Errorf("Error. Cannot update device states: %v\n", err)
+				return err
+			}
+
+			updateNeeded = false
+		}
+		//TODO: When is update needed ?
+		time.Sleep(10 * time.Second)
+	}
+	return nil
+
+}
+
 func (cdm *cpuDeviceManager) Allocate(ctx context.Context, rqt *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
 	resp := new(pluginapi.AllocateResponse)
 	for _, container := range rqt.ContainerRequests {
@@ -220,7 +69,6 @@ func (cdm *cpuDeviceManager) Allocate(ctx context.Context, rqt *pluginapi.Alloca
 			cpusAllocated = cpusAllocated + id + ","
 		}
 		envmap["CPUS"] = cpusAllocated[:len(cpusAllocated)-1]
-		envmap["CMK_NUM_CORES"] = strconv.Itoa(len(container.DevicesIDs))
 		containerResp := new(pluginapi.ContainerAllocateResponse)
 		glog.Infof("CPUs allocated: %s: Num of CPUs %s", cpusAllocated[:len(cpusAllocated)-1],
 			strconv.Itoa(len(container.DevicesIDs)))
@@ -230,41 +78,59 @@ func (cdm *cpuDeviceManager) Allocate(ctx context.Context, rqt *pluginapi.Alloca
 	}
 	return resp, nil
 }
-func main() {
-	dpcpus := flag.Int("dp-cores", 1, "Dataplane cores")
-	flag.Parse()
-	glog.Infof("CPU Device Plugin started...")
-	cdm := NewCpuDeviceManager(*dpcpus)
-	if cdm == nil {
-		return
+
+func (cdm *cpuDeviceManager) GetDevicePluginOptions(context.Context, *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
+	return &pluginapi.DevicePluginOptions{}, nil
+}
+
+func (l *Lister) GetResourceNamespace() string {
+	return "nokia.com"
+}
+
+type Lister struct {
+	poolConfig PoolConfig
+}
+
+// Monitors available resources
+// CPU pools are static so return after reporting initial list of pools
+func (l *Lister) Discover(pluginListCh chan dpm.PluginNameList) {
+	list := dpm.PluginNameList{}
+	for poolName, _ := range l.poolConfig.Pools {
+		list = append(list, poolName)
 	}
-	cdm.cleanup()
+	pluginListCh <- list
+	return
+}
 
-	// respond to syscalls for termination
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+func (l *Lister) NewPlugin(resourceLastName string) dpm.PluginInterface {
+	glog.Infof("Starting plugin for resource %d", resourceLastName)
 
-	// Start server
-	if err := cdm.Start(); err != nil {
-		glog.Errorf("cpuDeviceManager.Start() failed: %v", err)
-		return
+	return &cpuDeviceManager{
+		pool: l.poolConfig.Pools[resourceLastName],
 	}
 
-	// Registers with Kubelet.
-	err := Register(path.Join(pluginMountPath, kubeletEndpoint), cdm.socketFile, "nokia.com/cpupool1")
+}
+
+func readPoolConfig() (PoolConfig, error) {
+	var pools PoolConfig
+	file, err := ioutil.ReadFile("/etc/cpudp/poolconfig.yaml")
 	if err != nil {
-		// Stop server
-		cdm.grpcServer.Stop()
-		glog.Fatal(err)
-		return
+		glog.Errorf("Could not read poolconfig")
+	} else {
+		err = yaml.Unmarshal([]byte(file), &pools)
+		if err != nil {
+			glog.Errorf("Error in poolconfig file %v", err)
+		}
 	}
-	glog.Infof("CPU device plugin registered with the Kubelet")
+	return pools, err
+}
 
-	// Catch termination signals
-	select {
-	case sig := <-sigCh:
-		glog.Infof("Received signal \"%v\", shutting down.", sig)
-		cdm.Stop()
-		return
+func main() {
+	poolsConf, err := readPoolConfig()
+	if err != nil {
+		panic("Configuration error")
 	}
+	lister := Lister{poolConfig: poolsConf}
+	manager := dpm.NewManager(&lister)
+	manager.Run()
 }

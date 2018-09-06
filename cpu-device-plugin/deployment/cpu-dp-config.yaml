@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cpu-dp-configmap
+data:
+  poolconfig.yaml: |
+    pools: 
+      cpupool1:
+        cpus : "4,5,6,7"
+      cpupool2:
+        cpus : "8,9,10,11"

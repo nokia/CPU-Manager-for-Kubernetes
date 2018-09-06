@@ -1,17 +1,10 @@
-package: cpu-device-plugin
+package: .
 import:
+- package: github.com/go-yaml/yaml
 - package: github.com/golang/glog
-- package: github.com/golang/protobuf
+- package: github.com/kubevirt/device-plugin-manager
   subpackages:
-  - proto
-- package: google.golang.org/grpc
-- package: k8s.io/apimachinery
-  subpackages:
-  - pkg/apis/meta/v1
-- package: k8s.io/client-go
-  subpackages:
-  - kubernetes
-  - rest
+  - pkg/dpm
 - package: k8s.io/kubernetes
   subpackages:
   - pkg/kubelet/apis/deviceplugin/v1beta1

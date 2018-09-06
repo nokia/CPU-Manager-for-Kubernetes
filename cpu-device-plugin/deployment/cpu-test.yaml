@@ -5,9 +5,8 @@ metadata:
 spec:
   containers:
   - name: cpupod
-    command:
-    - /opt/bin/cmk
-    args: ["isolate","--conf-dir=/etc/cmk","--pool=dataplane","sleep","--","2000000000000"]
+    command: [ "/bin/bash", "-c", "--" ]
+    args: [ "while true; do sleep 1; done;" ]
     image: centos
     imagePullPolicy: IfNotPresent
     ports:
