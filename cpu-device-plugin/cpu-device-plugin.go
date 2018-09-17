@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"github.com/go-yaml/yaml"
 	"github.com/golang/glog"
 	"github.com/kubevirt/device-plugin-manager/pkg/dpm"
@@ -126,6 +127,7 @@ func readPoolConfig() (PoolConfig, error) {
 }
 
 func main() {
+	flag.Parse()
 	poolsConf, err := readPoolConfig()
 	if err != nil {
 		panic("Configuration error")

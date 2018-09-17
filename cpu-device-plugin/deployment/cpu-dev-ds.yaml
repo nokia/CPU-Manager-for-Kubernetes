@@ -16,10 +16,7 @@ spec:
       - name: cpu-device-plugin 
         image: cpudp
         imagePullPolicy: IfNotPresent
-        command: [ "/cpu-device-plugin", "-logtostderr", "-dp-cores","7" ]
-        env:
-        - name: CMK_PROC_FS
-          value: "/host/proc"
+        command: [ "/cpu-device-plugin", "-logtostderr" ]
         volumeMounts:
          - mountPath: /etc/cpudp
            name: cpu-dp-config
